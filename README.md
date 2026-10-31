@@ -4,8 +4,6 @@ A small [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server t
 
 It is built with the official MCP Python SDK (`FastMCP`) and keeps all its data **in memory**, so it's a demo or learning project, not a production HR system.
 
----
-
 ## Features
 
 | Type     | Name                | What it does                                                        |
