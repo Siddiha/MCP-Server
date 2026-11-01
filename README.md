@@ -14,12 +14,30 @@ It is built with the official MCP Python SDK (`FastMCP`) and stores its data in 
 | Tool     | `get_leave_history`             | Lists every date the employee has booked.                             |
 | Tool     | `add_employee`                  | Adds a new employee with a starting balance.                          |
 | Tool     | `check_availability`            | Checks dates without booking them, with a reason per date.            |
+| Tool     | `draft_handover_note`           | Asks **your** model to write a handover note (MCP sampling).          |
 | Resource | `leave://employees`             | Every employee with their current balance, as JSON.                   |
 | Resource | `leave://{employee_id}/balance` | One employee's balance and booked dates, as JSON.                     |
 | Resource | `greeting://{name}`             | Returns a personalized greeting message.                              |
 | Prompt   | `leave_request_email`           | Template that drafts a leave request email for given dates.           |
 
 Tools return **structured JSON** (each has an output schema), not sentences. Invalid input raises an error, so the client sees a real tool error instead of a string that looks like success.
+
+### How the code is organised
+
+| File               | Job                                                                 |
+| ------------------ | ------------------------------------------------------------------- |
+| `leave_service.py` | The rules and storage. Plain Python, knows nothing about MCP.        |
+| `main.py`          | The MCP layer: tools, resources, prompt, and the `Context` plumbing. |
+
+Keeping them apart means the rules can be tested as ordinary functions, and the same service could be reused behind a CLI or a web app.
+
+### What `Context` does
+
+Every tool takes a `ctx: Context` argument. MCP fills it in, and it never appears in the tool's input schema. It is how a tool talks back to the client *while it is running*:
+
+- `await ctx.info(...)` / `ctx.debug(...)` — log messages the client can show
+- `await ctx.report_progress(progress, total, message)` — drives a progress bar; `apply_leave` reports two steps
+- `await ctx.session.create_message(...)` — **sampling**: the tool asks the client's own model a question. `draft_handover_note` uses this, which is why this server needs no API key of its own. A client that doesn't support sampling gets a clear error instead of a crash.
 
 ### Sample data
 
@@ -88,7 +106,12 @@ mcp dev main.py
 pytest -q
 ```
 
-23 tests cover the validation rules, the refund path, the resources, and that saved data survives a restart. Each test gets its own data file in a temporary folder via `LEAVE_DATA_FILE`, so the tests never touch real data.
+36 tests, in two files:
+
+- `test_leave_service.py` — the rules as plain functions: validation, the refund path, and that saved data survives a restart.
+- `test_mcp_server.py` — the protocol layer through a real in-memory client: schemas, tool errors, progress notifications, log messages, sampling, resources and prompts.
+
+Each test gets its own data file in a temporary folder via `LEAVE_DATA_FILE`, so the tests never touch real data. Sampling is tested with a fake model, so no API calls are made.
 
 ---
 
@@ -199,6 +222,16 @@ Cancel dates the employee already booked and refund the days.
 
 ---
 
+### `draft_handover_note`
+
+Asks the client's model to draft a handover note for the employee's booked leave. Returns plain text. Errors if the employee has no booked leave, or if the client doesn't support sampling.
+
+| Parameter     | Type     | Required |
+| ------------- | -------- | -------- |
+| `employee_id` | `string` | Yes      |
+
+---
+
 ### `check_availability`
 
 Check dates **without** booking them. Useful before `apply_leave`.
@@ -249,6 +282,7 @@ Once the server is connected, try asking Claude:
 - "Cancel E002's leave on 2026-12-01."
 - "Add a new employee E003 with 15 days."
 - "Draft a leave request email for E001 for 2026-12-24."
+- "Write a handover note for E001's leave."
 
 ---
 
@@ -267,8 +301,10 @@ These are known limitations of the current code:
 
 ```text
 MCP-Server-Leave-Management-System/
-├── main.py           # MCP server: tools, resources, prompt, storage
-├── test_main.py      # pytest suite
-├── leave_data.json   # created at runtime, git-ignored
+├── main.py                 # MCP layer: tools, resources, prompt, Context
+├── leave_service.py        # Leave rules and storage (no MCP)
+├── test_leave_service.py   # Tests for the rules
+├── test_mcp_server.py      # Tests through a real MCP client session
+├── leave_data.json         # created at runtime, git-ignored
 └── README.md
 ```
