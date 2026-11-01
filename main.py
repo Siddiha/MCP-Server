@@ -1,5 +1,6 @@
 from mcp.server.fastmcp import FastMCP
 from datetime import date
+from pydantic import BaseModel, Field
 from pathlib import Path
 from typing import List
 import json
@@ -46,76 +47,120 @@ employee_leaves = load_leaves()
 # Create MCP server
 mcp = FastMCP("LeaveManager")
 
-# Tool: Check Leave Balance
-@mcp.tool()
-def get_leave_balance(employee_id: str) -> str:
-    """Check how many leave days are left for the employee"""
+
+# Tools return these models, so the client gets structured JSON it can use,
+# not a sentence it has to read.
+class LeaveBalance(BaseModel):
+    """How much leave an employee has left"""
+    employee_id: str
+    balance: int = Field(description="Leave days still available")
+    days_taken: int = Field(description="Leave days already booked")
+
+
+class LeaveApplication(BaseModel):
+    """The result of applying for leave"""
+    employee_id: str
+    dates_applied: list[str]
+    days_used: int
+    remaining_balance: int
+
+
+class LeaveHistory(BaseModel):
+    """Every leave date an employee has booked"""
+    employee_id: str
+    dates: list[str]
+    days_taken: int
+
+
+def get_employee(employee_id: str) -> dict:
+    """Look up an employee, or raise an error the client can see"""
     data = employee_leaves.get(employee_id)
-    if data:
-        return f"{employee_id} has {data['balance']} leave days remaining."
-    return "Employee ID not found."
+    if data is None:
+        raise ValueError(f"Employee '{employee_id}' not found.")
+    return data
 
-# Tool: Apply for Leave with specific dates
-@mcp.tool()
-def apply_leave(employee_id: str, leave_dates: List[str]) -> str:
-    """
-    Apply leave for specific dates (e.g., ["2026-11-17", "2026-12-01"])
-    """
-    if employee_id not in employee_leaves:
-        return "Employee ID not found."
 
+def check_dates(leave_dates: list[str]) -> None:
+    """Raise an error if any date is unusable. Returns nothing when all are fine."""
     if not leave_dates:
-        return "Please give at least one date."
+        raise ValueError("Give at least one date.")
 
-    # Each date must be a real date in YYYY-MM-DD format and not in the past
     for leave_date in leave_dates:
         try:
             parsed = date.fromisoformat(leave_date)
         except ValueError:
-            return f"Invalid date '{leave_date}'. Use the format YYYY-MM-DD."
+            raise ValueError(f"Invalid date '{leave_date}'. Use the format YYYY-MM-DD.")
         if parsed < date.today():
-            return f"Cannot apply leave for a past date: {leave_date}."
+            raise ValueError(f"Cannot apply leave for a past date: {leave_date}.")
 
-    # The same date can't be listed twice in one request
     if len(set(leave_dates)) != len(leave_dates):
-        return "Duplicate dates in your request. Each date can only be listed once."
+        raise ValueError("Duplicate dates in your request. List each date once.")
+
+
+# Tool: Check Leave Balance
+@mcp.tool()
+def get_leave_balance(employee_id: str) -> LeaveBalance:
+    """Check how many leave days are left for the employee"""
+    data = get_employee(employee_id)
+    return LeaveBalance(
+        employee_id=employee_id,
+        balance=data["balance"],
+        days_taken=len(data["history"]),
+    )
+
+
+# Tool: Apply for Leave with specific dates
+@mcp.tool()
+def apply_leave(employee_id: str, leave_dates: list[str]) -> LeaveApplication:
+    """Apply leave for specific dates (e.g., ["2026-11-17", "2026-12-01"])"""
+    data = get_employee(employee_id)
+    check_dates(leave_dates)
 
     # The same date can't be booked twice across requests
-    history = employee_leaves[employee_id]["history"]
+    history = data["history"]
     already_taken = [d for d in leave_dates if d in history]
     if already_taken:
-        return f"Leave already applied for: {', '.join(already_taken)}."
+        raise ValueError(f"Leave already applied for: {', '.join(already_taken)}.")
 
     requested_days = len(leave_dates)
-    available_balance = employee_leaves[employee_id]["balance"]
-
-    if available_balance < requested_days:
-        return f"Insufficient leave balance. You requested {requested_days} day(s) but have only {available_balance}."
+    if data["balance"] < requested_days:
+        raise ValueError(
+            f"Insufficient leave balance. You requested {requested_days} day(s) "
+            f"but have only {data['balance']}."
+        )
 
     # Deduct balance and add to history
-    employee_leaves[employee_id]["balance"] -= requested_days
+    data["balance"] -= requested_days
     history.extend(leave_dates)
     save_leaves()
     log.info("%s applied for %d day(s)", employee_id, requested_days)
 
-    return f"Leave applied for {requested_days} day(s). Remaining balance: {employee_leaves[employee_id]['balance']}."
+    return LeaveApplication(
+        employee_id=employee_id,
+        dates_applied=sorted(leave_dates),
+        days_used=requested_days,
+        remaining_balance=data["balance"],
+    )
 
 
 # Tool: Leave history
 @mcp.tool()
-def get_leave_history(employee_id: str) -> str:
+def get_leave_history(employee_id: str) -> LeaveHistory:
     """Get leave history for the employee"""
-    data = employee_leaves.get(employee_id)
-    if data:
-        history = ', '.join(data['history']) if data['history'] else "No leaves taken."
-        return f"Leave history for {employee_id}: {history}"
-    return "Employee ID not found."
+    data = get_employee(employee_id)
+    return LeaveHistory(
+        employee_id=employee_id,
+        dates=sorted(data["history"]),
+        days_taken=len(data["history"]),
+    )
+
 
 # Resource: Greeting
 @mcp.resource("greeting://{name}")
 def get_greeting(name: str) -> str:
     """Get a personalized greeting"""
     return f"Hello, {name}! How can I assist you with leave management today?"
+
 
 if __name__ == "__main__":
     mcp.run()
