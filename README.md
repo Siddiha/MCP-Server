@@ -24,12 +24,19 @@ Tools return **structured JSON** (each has an output schema), not sentences. Inv
 
 ### How the code is organised
 
-| File               | Job                                                                 |
-| ------------------ | ------------------------------------------------------------------- |
-| `leave_service.py` | The rules and storage. Plain Python, knows nothing about MCP.        |
-| `main.py`          | The MCP layer: tools, resources, prompt, and the `Context` plumbing. |
+The package lives under `src/`, which keeps the installed code separate from the tests and project files.
 
-Keeping them apart means the rules can be tested as ordinary functions, and the same service could be reused behind a CLI or a web app.
+| Module       | Job                                                                 |
+| ------------ | ------------------------------------------------------------------- |
+| `config.py`  | Settings, read from the environment in one place.                    |
+| `models.py`  | The shapes the tools return.                                         |
+| `storage.py` | `LeaveStore`: reading and writing the JSON data file.                |
+| `rules.py`   | Date checks, with `today` injectable so tests don't depend on the clock. |
+| `service.py` | `LeaveService`: the leave rules. No MCP in sight.                    |
+| `server.py`  | `create_server(service)`: the MCP layer.                             |
+| `__main__.py`| Wires it together and serves over stdio.                             |
+
+Nothing is a module-level global. `create_server` is handed a service, and the service is handed a store, so a test can build the whole stack on a temporary file and get a server identical to the real one.
 
 ### What `Context` does
 
@@ -69,31 +76,37 @@ cd MCP-Server-Leave-Management-System
 python3 -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 
-# Install the MCP SDK (v1.x) and the test runner
-pip install "mcp[cli]<2" pytest
+# Install the package and its test dependencies
+pip install -e ".[dev]"
 ```
+
+`-e` installs it in editable mode, so your edits take effect without reinstalling.
 
 ---
 
 ## Running the server
 
 ```bash
-python main.py
+leave-manager              # the installed command
+python -m leave_manager    # or run the package directly
 ```
 
 The server uses the **stdio** transport (the default for `mcp.run()`). When it starts, it waits quietly for an MCP client on stdin/stdout. Logs go to **stderr**, never stdout, because stdout carries the MCP protocol messages.
 
 ### Configuration
 
-| Environment variable | Default                   | What it does                              |
-| -------------------- | ------------------------- | ----------------------------------------- |
-| `LEAVE_DATA_FILE`    | `leave_data.json` (local) | Where leave data is saved between runs.   |
-| `LEAVE_LOG_LEVEL`    | `INFO`                    | Python log level, e.g. `DEBUG`, `WARNING`.|
+| Environment variable    | Default                            | What it does                               |
+| ----------------------- | ---------------------------------- | ------------------------------------------ |
+| `LEAVE_DATA_FILE`       | `~/.leave_manager/leave_data.json` | Where leave data is saved between runs.    |
+| `LEAVE_LOG_LEVEL`       | `INFO`                             | Python log level, e.g. `DEBUG`, `WARNING`. |
+| `LEAVE_DEFAULT_BALANCE` | `20`                               | Starting balance for a new employee.       |
+
+The data file lives in your home folder by default, so it doesn't depend on which directory you start the server from. Missing folders are created on first save.
 
 ### Testing with MCP Inspector
 
 ```bash
-mcp dev main.py
+mcp dev src/leave_manager/__main__.py
 ```
 
 > `mcp dev` requires [`uv`](https://docs.astral.sh/uv/) and Node.js (`npx`) to be installed.
@@ -106,12 +119,16 @@ mcp dev main.py
 pytest -q
 ```
 
-36 tests, in two files:
+48 tests, in four files:
 
-- `test_leave_service.py` — the rules as plain functions: validation, the refund path, and that saved data survives a restart.
-- `test_mcp_server.py` — the protocol layer through a real in-memory client: schemas, tool errors, progress notifications, log messages, sampling, resources and prompts.
+| File               | Covers                                                                   |
+| ------------------ | ------------------------------------------------------------------------ |
+| `test_rules.py`    | Date parsing and validation, with the clock pinned.                       |
+| `test_config.py`   | Settings defaults and environment overrides.                              |
+| `test_service.py`  | The leave rules, the refund path, and data surviving a restart.           |
+| `test_server.py`   | The protocol layer: schemas, tool errors, progress, logging, sampling.    |
 
-Each test gets its own data file in a temporary folder via `LEAVE_DATA_FILE`, so the tests never touch real data. Sampling is tested with a fake model, so no API calls are made.
+Fixtures in `conftest.py` give each test its own store on a temporary file, so the tests never touch real data and never need to reload modules. Sampling is tested with a fake model, so no API calls are made.
 
 ---
 
@@ -128,12 +145,13 @@ Add this, using the **absolute paths** on your machine:
 {
   "mcpServers": {
     "LeaveManager": {
-      "command": "/ABSOLUTE/PATH/TO/MCP-Server-Leave-Management-System/venv/bin/python",
-      "args": ["/ABSOLUTE/PATH/TO/MCP-Server-Leave-Management-System/main.py"]
+      "command": "/ABSOLUTE/PATH/TO/MCP-Server-Leave-Management-System/venv/bin/leave-manager"
     }
   }
 }
 ```
+
+> If you connected this server before, the old config pointed at `main.py`, which no longer exists. Replace it with the block above.
 
 Restart Claude Desktop. The LeaveManager tools should then show up in the tools menu.
 
@@ -301,10 +319,23 @@ These are known limitations of the current code:
 
 ```text
 MCP-Server-Leave-Management-System/
-├── main.py                 # MCP layer: tools, resources, prompt, Context
-├── leave_service.py        # Leave rules and storage (no MCP)
-├── test_leave_service.py   # Tests for the rules
-├── test_mcp_server.py      # Tests through a real MCP client session
-├── leave_data.json         # created at runtime, git-ignored
+├── src/
+│   └── leave_manager/
+│       ├── __init__.py
+│       ├── __main__.py      # entry point
+│       ├── config.py        # settings from the environment
+│       ├── models.py        # what the tools return
+│       ├── rules.py         # date checks
+│       ├── service.py       # the leave rules
+│       ├── server.py        # the MCP layer
+│       └── storage.py       # the JSON data file
+├── tests/
+│   ├── conftest.py          # shared fixtures
+│   ├── test_config.py
+│   ├── test_rules.py
+│   ├── test_server.py
+│   └── test_service.py
+├── pyproject.toml           # dependencies, entry point, pytest config
+├── .gitignore
 └── README.md
 ```
