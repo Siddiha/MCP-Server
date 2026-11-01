@@ -277,6 +277,51 @@ def check_availability(employee_id: str, leave_dates: list[str]) -> Availability
     )
 
 
+# Resource: One employee's leave record as JSON.
+# A resource is for reading data. Use a tool when something changes.
+@mcp.resource("leave://{employee_id}/balance")
+def balance_resource(employee_id: str) -> str:
+    """Leave balance and booked dates for one employee"""
+    data = get_employee(employee_id)
+    return json.dumps(
+        {
+            "employee_id": employee_id,
+            "balance": data["balance"],
+            "dates": sorted(data["history"]),
+        },
+        indent=2,
+    )
+
+
+# Resource: The whole roster, so a client can see who exists
+@mcp.resource("leave://employees")
+def employees_resource() -> str:
+    """Every employee with their current balance"""
+    return json.dumps(
+        [
+            {"employee_id": emp_id, "balance": rec["balance"]}
+            for emp_id, rec in sorted(employee_leaves.items())
+        ],
+        indent=2,
+    )
+
+
+# Prompt: a reusable template the user can pick in the client
+@mcp.prompt()
+def leave_request_email(
+    employee_id: str, leave_dates: str, reason: str = "personal reasons"
+) -> str:
+    """Draft a short leave request email for these dates"""
+    return (
+        f"Write a short, polite leave request email.\n\n"
+        f"Employee ID: {employee_id}\n"
+        f"Dates requested: {leave_dates}\n"
+        f"Reason: {reason}\n\n"
+        f"Keep it under 120 words. Before writing, call check_availability "
+        f"for these dates and mention in the email only the dates that are free."
+    )
+
+
 # Resource: Greeting
 @mcp.resource("greeting://{name}")
 def get_greeting(name: str) -> str:
