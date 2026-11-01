@@ -72,6 +72,35 @@ class LeaveHistory(BaseModel):
     days_taken: int
 
 
+class LeaveCancellation(BaseModel):
+    """The result of cancelling leave"""
+    employee_id: str
+    dates_cancelled: list[str]
+    days_refunded: int
+    remaining_balance: int
+
+
+class Employee(BaseModel):
+    """An employee record"""
+    employee_id: str
+    balance: int
+    days_taken: int
+
+
+class DateAvailability(BaseModel):
+    """Whether one date can still be booked"""
+    leave_date: str
+    available: bool
+    reason: str
+
+
+class AvailabilityReport(BaseModel):
+    """Which of the requested dates are free"""
+    employee_id: str
+    dates: list[DateAvailability]
+    all_available: bool
+
+
 def get_employee(employee_id: str) -> dict:
     """Look up an employee, or raise an error the client can see"""
     data = employee_leaves.get(employee_id)
@@ -152,6 +181,99 @@ def get_leave_history(employee_id: str) -> LeaveHistory:
         employee_id=employee_id,
         dates=sorted(data["history"]),
         days_taken=len(data["history"]),
+    )
+
+
+# Tool: Cancel leave that was already applied for
+@mcp.tool()
+def cancel_leave(employee_id: str, leave_dates: list[str]) -> LeaveCancellation:
+    """Cancel leave for dates the employee already booked, and refund the days"""
+    data = get_employee(employee_id)
+
+    if not leave_dates:
+        raise ValueError("Give at least one date.")
+    if len(set(leave_dates)) != len(leave_dates):
+        raise ValueError("Duplicate dates in your request. List each date once.")
+
+    history = data["history"]
+    not_booked = [d for d in leave_dates if d not in history]
+    if not_booked:
+        raise ValueError(f"No leave booked on: {', '.join(not_booked)}.")
+
+    for leave_date in leave_dates:
+        history.remove(leave_date)
+    data["balance"] += len(leave_dates)
+    save_leaves()
+    log.info("%s cancelled %d day(s)", employee_id, len(leave_dates))
+
+    return LeaveCancellation(
+        employee_id=employee_id,
+        dates_cancelled=sorted(leave_dates),
+        days_refunded=len(leave_dates),
+        remaining_balance=data["balance"],
+    )
+
+
+# Tool: Add a new employee
+@mcp.tool()
+def add_employee(employee_id: str, balance: int = 20) -> Employee:
+    """Add a new employee with a starting leave balance"""
+    employee_id = employee_id.strip()
+    if not employee_id:
+        raise ValueError("Employee ID cannot be empty.")
+    if employee_id in employee_leaves:
+        raise ValueError(f"Employee '{employee_id}' already exists.")
+    if balance < 0:
+        raise ValueError("Starting balance cannot be negative.")
+
+    employee_leaves[employee_id] = {"balance": balance, "history": []}
+    save_leaves()
+    log.info("Added employee %s with %d day(s)", employee_id, balance)
+
+    return Employee(employee_id=employee_id, balance=balance, days_taken=0)
+
+
+# Tool: Check dates before applying
+@mcp.tool()
+def check_availability(employee_id: str, leave_dates: list[str]) -> AvailabilityReport:
+    """Check whether dates can be booked, without applying for them"""
+    data = get_employee(employee_id)
+    if not leave_dates:
+        raise ValueError("Give at least one date.")
+
+    history = data["history"]
+    seen: set[str] = set()
+    results = []
+    for leave_date in leave_dates:
+        try:
+            parsed = date.fromisoformat(leave_date)
+        except ValueError:
+            reason = "Not a valid date. Use the format YYYY-MM-DD."
+        else:
+            if parsed < date.today():
+                reason = "This date is in the past."
+            elif leave_date in history:
+                reason = "Leave is already booked on this date."
+            elif leave_date in seen:
+                reason = "This date is listed twice in the request."
+            else:
+                reason = "Available."
+        seen.add(leave_date)
+        results.append(
+            DateAvailability(
+                leave_date=leave_date,
+                available=reason == "Available.",
+                reason=reason,
+            )
+        )
+
+    free_days = sum(1 for r in results if r.available)
+    all_available = free_days == len(results) and free_days <= data["balance"]
+
+    return AvailabilityReport(
+        employee_id=employee_id,
+        dates=results,
+        all_available=all_available,
     )
 
 
