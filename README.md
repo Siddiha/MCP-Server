@@ -1,6 +1,6 @@
 # LeaveManager MCP Server
 
-A small [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that lets an AI assistant (like Claude) check employee leave balances, apply for and cancel leave, and view leave history.
+A small [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that lets an AI assistant (like Claude) check employee leave balances, apply for and cancel leave, and view leave history...
 
 It is built with the official MCP Python SDK (`FastMCP`) and stores its data in a local JSON file, so it's a demo or learning project, not a production HR system.
 
