@@ -312,9 +312,7 @@ These are known limitations of the current code:
 - **Single file storage.** Data is a JSON file read into memory, with no locking, so two servers sharing one file would overwrite each other. SQLite would be the next step.
 - **No half days or date ranges.** Every date is one full day and must be listed individually.
 - **No holidays or weekends.** Any future date can be booked, including a Sunday.
-
----
-
+  
 ## Project structure
 
 ```text
